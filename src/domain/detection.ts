@@ -1,0 +1,7 @@
+import {normaliseMerchant,type TransactionInput} from "./transactions";
+export type Candidate={merchant:string;transactions:TransactionInput[];medianIntervalDays:number;amountVariation:number;score:number;cycle:"MONTHLY"|"QUARTERLY"|"ANNUAL"|"IRREGULAR"};
+const median=(n:number[])=>{const s=[...n].sort((a,b)=>a-b),m=Math.floor(s.length/2);return s.length%2?s[m]:(s[m-1]+s[m])/2};
+export function detectRecurring(rows:TransactionInput[]):Candidate[]{
+ const groups=new Map<string,TransactionInput[]>(); for(const r of rows){const k=normaliseMerchant(r.description);groups.set(k,[...(groups.get(k)||[]),r])}
+ return [...groups.entries()].flatMap(([merchant,tx])=>{if(tx.length<3)return[];tx.sort((a,b)=>Date.parse(a.date)-Date.parse(b.date));const gaps=tx.slice(1).map((x,i)=>(Date.parse(x.date)-Date.parse(tx[i].date))/86400000);const interval=median(gaps);const avg=tx.reduce((a,x)=>a+Math.abs(x.amount),0)/tx.length;const variation=avg?Math.max(...tx.map(x=>Math.abs(Math.abs(x.amount)-avg)/avg)):0;let cycle:Candidate["cycle"]="IRREGULAR";if(interval>=25&&interval<=36)cycle="MONTHLY";else if(interval>=80&&interval<=100)cycle="QUARTERLY";else if(interval>=340&&interval<=390)cycle="ANNUAL";const intervalScore=cycle==="IRREGULAR"?.2:1;const score=Math.round(Math.max(0,Math.min(1,.65*intervalScore+.25*(1-Math.min(variation,1))+.1*Math.min(tx.length/6,1)))*100)/100;return [{merchant,transactions:tx,medianIntervalDays:Math.round(interval),amountVariation:Math.round(variation*100)/100,score,cycle}]})
+}

@@ -1,0 +1,5 @@
+import {z} from "zod";
+export const recommendationDraftSchema=z.object({type:z.enum(["CANCEL","CONSOLIDATE","DOWNGRADE","BILLING_CYCLE","LICENCE_REVIEW","PRICE_REVIEW","ALTERNATIVE","EXISTING_SOFTWARE"]),title:z.string().min(5),rationale:z.string().min(20),clientWording:z.string().min(20),confidence:z.enum(["LOW","MEDIUM","HIGH"]),estimatedSaving:z.number().nonnegative(),effort:z.enum(["LOW","MEDIUM","HIGH"]),assumptions:z.array(z.string()),evidence:z.array(z.object({url:z.string().url(),title:z.string(),retrievedAt:z.string().date(),facts:z.array(z.string()).min(1)})).min(1),requiredConfirmation:z.string().min(5)});
+export type RecommendationDraft=z.infer<typeof recommendationDraftSchema>;
+export interface RecommendationGenerator{generate(input:{provider:string;annualCost:number;category:string;context:string}):Promise<RecommendationDraft>}
+export class AzureOpenAiRecommendationGenerator implements RecommendationGenerator{async generate():Promise<RecommendationDraft>{throw new Error("Azure OpenAI credentials and deployment are required to generate recommendations")}}

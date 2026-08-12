@@ -1,0 +1,5 @@
+export type Role="FIRM_ADMIN"|"ADVISOR"|"CLIENT_ADMIN"|"CLIENT_CONTRIBUTOR"|"CLIENT_VIEWER";
+export type Action="firm:manage"|"client:read"|"client:edit"|"recommendation:draft"|"recommendation:approve"|"recommendation:respond"|"xero:connect";
+const grants:Record<Role,Action[]>={FIRM_ADMIN:["firm:manage","client:read","client:edit","recommendation:draft","recommendation:approve","recommendation:respond","xero:connect"],ADVISOR:["client:read","client:edit","recommendation:draft","recommendation:approve","recommendation:respond","xero:connect"],CLIENT_ADMIN:["client:read","client:edit","recommendation:respond","xero:connect"],CLIENT_CONTRIBUTOR:["client:read","client:edit","recommendation:respond"],CLIENT_VIEWER:["client:read"]};
+export function can(role:Role,action:Action){return grants[role].includes(action)}
+export function assertTenantScope(membership:{firmId:string;clientId?:string|null},record:{firmId:string;clientId?:string|null}){if(membership.firmId!==record.firmId)throw new Error("Cross-tenant access denied");if(membership.clientId&&membership.clientId!==record.clientId)throw new Error("Cross-client access denied")}

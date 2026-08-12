@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 92" role="img" aria-label="Versatile Accounting">
+  <path fill="#121212" d="M2 8h23l23 51L73 8h21L59 78H38z"/>
+  <path fill="#C08A2A" d="M94 6l39 72h-22L94 43 77 78H55z"/>
+  <path fill="#121212" d="M153 18h21l12 30 12-30h20l-25 57h-15zm70 0h49v14h-30v8h27v13h-27v8h31v14h-50zm57 0h29c20 0 31 9 31 26 0 11-5 18-14 22l17 9h-22l-13-7h-9v7h-19zm19 14v22h9c9 0 13-4 13-11s-4-11-13-11z"/>
+  <text x="153" y="89" fill="#C08A2A" font-family="Arial,sans-serif" font-size="12" font-weight="700" letter-spacing="6">ACCOUNTING</text>
+</svg>
