@@ -85,6 +85,22 @@ CREATE TABLE subscriptions (
 );
 CREATE INDEX subscriptions_client_idx ON subscriptions(firm_id, client_id, status);
 
+CREATE TABLE detection_candidates (
+  id TEXT PRIMARY KEY,
+  firm_id TEXT NOT NULL,
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  merchant TEXT NOT NULL,
+  billing_cycle TEXT NOT NULL,
+  median_interval_days INTEGER NOT NULL,
+  amount_variation REAL NOT NULL,
+  confidence_score REAL NOT NULL,
+  annual_cost_cents INTEGER NOT NULL,
+  transaction_ids_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','CONFIRMED','DISMISSED')),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX detection_candidates_client_idx ON detection_candidates(firm_id, client_id, status);
+
 CREATE TABLE recommendations (
   id TEXT PRIMARY KEY,
   firm_id TEXT NOT NULL,

@@ -2,7 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "subscription-spend-advisor",
   "main": ".open-next/worker.js",
-  "compatibility_date": "2026-08-12",
+  "compatibility_date": "2026-08-14",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "directory": ".open-next/assets",
@@ -24,13 +24,10 @@
   "ai": {
     "binding": "AI"
   },
-  "queues": {
-    "producers": [
-      {
-        "binding": "ANALYSIS_QUEUE",
-        "queue": "subscription-spend-analysis"
-      }
-    ]
+  "vars": {
+    "AUTH_MODE": "access",
+    "FIRM_ID": "firm_va",
+    "FIRM_NAME": "Versatile Accounting"
   },
   "observability": {
     "enabled": true,

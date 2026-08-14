@@ -1,0 +1,2 @@
+ALTER TABLE import_batches ADD COLUMN errors_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE subscriptions ADD COLUMN gst_treatment TEXT NOT NULL DEFAULT 'UNKNOWN' CHECK (gst_treatment IN ('GST_INCLUSIVE','GST_EXCLUSIVE','GST_FREE','UNKNOWN'));
