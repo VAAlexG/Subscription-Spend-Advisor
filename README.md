@@ -1,88 +1,76 @@
 # VA Subscription Spend Advisor
 
-An internal advisory web application for Versatile Accounting to identify recurring client subscriptions, review potential savings and produce evidence-backed recommendations.
+A Cloudflare-native internal advisory application for Versatile Accounting to identify recurring client subscriptions, review potential savings, and produce evidence-backed quarterly reports.
 
-The interface follows the Versatile Accounting brand system: Ledger Ink, Versatile Gold, Sand, Archive typography and the VA ascent mark.
+## Phase 1 status
 
-## Current product stage
+Phase 1 is implemented as a working advisor pilot:
 
-This repository contains the working Phase 1 pilot interface and its core domain logic:
+- Cloudflare Access identity boundary with D1-backed firm and advisor memberships;
+- tenant-scoped client workspaces and audit logging;
+- configurable Xero CSV mapping, row validation, R2 source retention and duplicate protection;
+- recurring-payment detection with supporting transaction IDs, cadence and confidence;
+- confirmed and manual subscription register with billing cycle, owner, renewal, notice period and GST treatment;
+- AUD annualisation with client-selectable GST-inclusive or GST-exclusive presentation;
+- Workers AI recommendation drafting constrained by advisor-supplied evidence;
+- manual recommendations, advisor-only approval and separate estimated/accepted/implemented/verified outcomes;
+- branded, immutable PDF report snapshots stored in R2 and served through an authorised route;
+- Xero/provider interface and client-portal data boundaries reserved for later phases.
 
-- firm portfolio and separate client workspaces;
-- Xero CSV import intake;
-- transaction fingerprinting and recurring-payment detection;
-- subscription register, renewal dates and ownership;
-- evidence-bearing AI recommendation validation and advisor approval states;
-- quarterly report archive and savings outcome tracking;
-- tenant/client role boundaries and audit model;
-- Xero OAuth provider boundary for the later direct integration.
+Workers AI output remains an internal draft. It cannot be published without advisor approval and never performs purchases, cancellations, migrations, deletion, or other client actions.
 
-The displayed portfolio is representative pilot data. D1 persistence, authenticated production actions, live Workers AI calls, Xero token exchange and report generation are the next implementation layer.
-
-## Run locally
+## Local development
 
 Requirements: Node.js 22 and pnpm 10 or newer.
 
 ```bash
 pnpm install
+pnpm wrangler d1 migrations apply subscription-spend-advisor-db --local
 pnpm dev
 ```
 
-Open `http://localhost:3000`.
+Open `http://localhost:3000`. Development mode supplies a local advisor identity; production requires the Cloudflare Access authenticated-user-email header.
 
-Run the checks with:
+Run verification with:
 
 ```bash
 pnpm test
 pnpm build
+pnpm cf:build
 ```
 
-## Cloudflare architecture
+## Cloudflare resources
 
-The hosted application runs as a full-stack Next.js Worker through Cloudflare's OpenNext adapter.
+The app is a full-stack Next.js Worker built by OpenNext. `wrangler.jsonc` declares:
 
-- **Workers** hosts the application and server routes.
-- **D1** stores firms, users, client workspaces, transactions, subscriptions, recommendations, reports and audit events.
-- **R2** stores original CSV imports, evidence files and generated PDFs.
-- **Queues** handles recurring-payment analysis and other background work.
-- **Workers AI** is reserved for structured recommendation drafts; advisor approval remains mandatory.
-- **Cloudflare Access** can protect the pilot site at the edge while Microsoft/client authentication is completed inside the application.
+- D1 binding `DB` for operational and audit data;
+- R2 binding `FILES` for CSV sources and generated PDFs;
+- Workers AI binding `AI` for structured recommendation drafts;
+- Workers Static Assets binding `ASSETS`;
+- Worker observability.
 
-Bindings are declared in `wrangler.jsonc`. D1's initial schema is in `migrations/0001_initial.sql`.
+Apply both migrations in `migrations/` before first use. No OAuth secret is required in Phase 1.
 
-## Deploy from a developer machine
+## First deployment
 
-Authenticate Wrangler once:
-
-```bash
-pnpm wrangler login
-pnpm deploy
-```
-
-Wrangler will build the Next.js application, create the Worker bundle and provision the declared Cloudflare resources. Apply the D1 migration after the database is created:
+After creating the Cloudflare Worker, D1 database and R2 bucket, replace the placeholder D1 `database_id` in `wrangler.jsonc`, authenticate Wrangler and run:
 
 ```bash
 pnpm wrangler d1 migrations apply subscription-spend-advisor-db --remote
+pnpm deploy
 ```
 
-Use `wrangler secret put` for secrets. Do not put credentials in `wrangler.jsonc` or commit `.env` files.
+Protect the production hostname with Cloudflare Access and initially allow only `alexg@versatileaccounting.com.au`. That configured identity is the only account permitted to bootstrap the firm-administrator membership; subsequent users must be added by an administrator in D1 until staff management UI is introduced.
 
 ## GitHub deployment
 
-The repository includes two workflows:
-
-- `CI` runs tests, the Next.js build and the Cloudflare Worker build.
-- `Deploy to Cloudflare` performs a manual production deployment from the GitHub Actions screen.
-
-Add these GitHub repository secrets before enabling deployment:
+`CI` verifies tests, the Next.js build and the Worker bundle. The manual deployment workflow requires these repository secrets:
 
 - `CLOUDFLARE_ACCOUNT_ID`
 - `CLOUDFLARE_API_TOKEN`
 
-The API token should be restricted to the required Workers, D1, R2 and Queues permissions for the relevant Cloudflare account. Once the first deployment succeeds, the workflow can be changed to deploy automatically on merges to `main`. Cloudflare also supports connecting the GitHub repository from the Workers dashboard if dashboard-managed builds are preferred.
+Restrict the token to the relevant Workers, D1, R2 and Workers AI resources. Cloudflare Access policy and resource creation remain account-level setup steps and are intentionally not committed as secrets.
 
-## Future Xero connection and client portal
+## Deferred phases
 
-Xero will use OAuth 2.0. Tokens must be stored as secrets, rotated safely and never written to logs. Each transaction retains its source so CSV and Xero data can be reconciled without duplication.
-
-The client portal will reuse the same tenant/client data model. Client users will only see published recommendations and public notes; internal advisor notes and unapproved AI drafts remain firm-only.
+Direct Xero OAuth, scheduled incremental synchronisation, client authentication/portal collaboration, multi-firm white labelling and billing remain Phase 2–4 work. The provider interface, provenance fields, tenant/client identifiers, recommendation publication states and internal/public note separation are already in place so these additions do not require a domain-model rebuild.

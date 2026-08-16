@@ -15,23 +15,20 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@auth/prisma-adapter": "^2.11.1",
-    "@prisma/client": "^6.14.0",
     "next": "^15.4.6",
-    "next-auth": "^5.0.0-beta.29",
     "papaparse": "^5.5.3",
+    "pdf-lib": "^1.17.1",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "zod": "^4.0.17"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260812.1",
+    "@opennextjs/cloudflare": "^1.12.1",
     "@types/node": "^24.2.1",
     "@types/papaparse": "^5.3.16",
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
-    "@cloudflare/workers-types": "^5.20260812.1",
-    "@opennextjs/cloudflare": "^1.12.1",
-    "prisma": "^6.14.0",
     "typescript": "^5.9.2",
     "vitest": "^3.2.4",
     "wrangler": "^4.30.0"
