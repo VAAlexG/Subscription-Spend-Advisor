@@ -11,6 +11,7 @@ import { parseCsv } from "@/integrations/accounting/csv-provider";
 import { detectRecurring } from "@/domain/detection";
 import { normaliseMerchant, transactionFingerprint } from "@/domain/transactions";
 import { annualise, type BillingCycle } from "@/domain/finance";
+import { chunkForBoundParameters, uniqueByKey } from "@/domain/import-batching";
 
 const refresh = () => ["/", "/clients", "/imports", "/subscriptions", "/recommendations", "/reports", "/audit"].forEach((path) => revalidatePath(path));
 const text = (form: FormData, name: string) => String(form.get(name) ?? "").trim();
@@ -25,22 +26,248 @@ export async function createClient(form: FormData) {
   await audit(session,id,"client.created","client",id,{name}); refresh(); redirect(`/clients/${id}`);
 }
 
-export async function importTransactions(form: FormData) {
-  const session=await requireAdvisor(); const db=await getDb(); const files=await getFiles();
-  const clientId=text(form,"clientId"); const client=await getClient(session,clientId); if(!client)throw new Error("Client not found");
-  const file=form.get("file"); if(!(file instanceof File)||!file.name.toLowerCase().endsWith(".csv"))throw new Error("A CSV file is required");
-  if(file.size>20*1024*1024)throw new Error("CSV files must be 20 MB or smaller");
-  const csv=await file.text();
-  const mapping={date:text(form,"dateColumn")||"Date",description:text(form,"descriptionColumn")||"Description",amount:text(form,"amountColumn")||"Amount",account:text(form,"accountColumn")||undefined,reference:text(form,"referenceColumn")||undefined};
-  const parsed=parseCsv(csv,mapping); const importId=crypto.randomUUID(); const objectKey=`imports/${session.firmId}/${clientId}/${importId}-${safeName(file.name)}`;
-  await files.put(objectKey,new TextEncoder().encode(csv),{httpMetadata:{contentType:"text/csv"},customMetadata:{clientId,importId}});
-  await db.prepare("INSERT INTO import_batches(id,firm_id,client_id,filename,mapping_json,source,imported_rows,rejected_rows,errors_json) VALUES(?,?,?,?,?,'CSV',?,?,?)")
-    .bind(importId,session.firmId,clientId,file.name,JSON.stringify(mapping),parsed.transactions.length,parsed.errors.length,JSON.stringify([...parsed.errors,...parsed.parseErrors.map(e=>e.message)])).run();
-  let inserted=0,duplicates=0; const importedInputs:{id:string;date:string;description:string;amount:number}[]=[];
-  for(const tx of parsed.transactions){const fingerprint=tx.providerId||transactionFingerprint({date:tx.date,description:tx.description,amount:tx.amount,account:tx.accountId});const id=crypto.randomUUID();const result=await db.prepare(`INSERT OR IGNORE INTO transactions(id,firm_id,client_id,import_id,source,provider_id,account_name,description,normalised_merchant,transaction_date,amount_cents,source_fingerprint,original_row_json) VALUES(?,?,?,?,'CSV',?,?,?,?,?,?,?,?)`).bind(id,session.firmId,clientId,importId,tx.providerId,tx.accountId,tx.description,normaliseMerchant(tx.description),tx.date,Math.round(tx.amount*100),fingerprint,JSON.stringify(tx.raw)).run();if(result.meta.changes){inserted++;importedInputs.push({id,date:tx.date,description:tx.description,amount:tx.amount})}else duplicates++}
-  const candidates=detectRecurring(importedInputs);
-  for(const candidate of candidates){const amounts=candidate.transactions.map((tx)=>Math.abs(tx.amount)).sort((a,b)=>a-b);const typical=amounts[Math.floor(amounts.length/2)]??0;const cycle=(candidate.cycle==="IRREGULAR"?"MONTHLY":candidate.cycle) as BillingCycle;await db.prepare(`INSERT INTO detection_candidates(id,firm_id,client_id,merchant,billing_cycle,median_interval_days,amount_variation,confidence_score,annual_cost_cents,transaction_ids_json) VALUES(?,?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.firmId,clientId,candidate.merchant,cycle,candidate.medianIntervalDays,candidate.amountVariation,candidate.score,Math.round(annualise(typical,cycle)*100),JSON.stringify(candidate.transactions.map((tx)=>tx.id))).run()}
-  await audit(session,clientId,"import.completed","import",importId,{filename:file.name,inserted,duplicates,rejected:parsed.errors.length,candidates:candidates.length,objectKey});refresh();redirect(`/imports?client=${clientId}`);
+export type ImportActionState = { error: string | null };
+
+type PreparedImportTransaction = {
+  id: string;
+  fingerprint: string;
+  providerId: string | null;
+  accountName: string;
+  description: string;
+  normalisedMerchant: string;
+  date: string;
+  amountCents: number;
+  amount: number;
+  originalRowJson: string;
+};
+
+export async function importTransactions(
+  _previousState: ImportActionState,
+  form: FormData,
+): Promise<ImportActionState> {
+  let storedObject: { files: R2Bucket; key: string } | null = null;
+  let completedClientId = "";
+
+  try {
+    const session = await requireAdvisor();
+    const db = await getDb();
+    const files = await getFiles();
+    const clientId = text(form, "clientId");
+    const client = await getClient(session, clientId);
+    if (!client) throw new Error("Client not found");
+
+    const file = form.get("file");
+    if (!(file instanceof File) || !file.name.toLowerCase().endsWith(".csv")) {
+      throw new Error("A CSV file is required");
+    }
+    if (file.size > 20 * 1024 * 1024) throw new Error("CSV files must be 20 MB or smaller");
+
+    const csv = await file.text();
+    const mapping = {
+      date: text(form, "dateColumn") || "Date",
+      description: text(form, "descriptionColumn") || "Description",
+      amount: text(form, "amountColumn") || "Amount",
+      account: text(form, "accountColumn") || undefined,
+      reference: text(form, "referenceColumn") || undefined,
+    };
+    const parsed = parseCsv(csv, mapping);
+    if (parsed.transactions.length === 0) {
+      throw new Error("No valid transactions were found. Check the column names and CSV contents.");
+    }
+
+    const prepared = parsed.transactions.map((tx): PreparedImportTransaction => ({
+      id: crypto.randomUUID(),
+      fingerprint:
+        tx.providerId ||
+        transactionFingerprint({
+          date: tx.date,
+          description: tx.description,
+          amount: tx.amount,
+          account: tx.accountId,
+        }),
+      providerId: tx.providerId || null,
+      accountName: tx.accountId,
+      description: tx.description,
+      normalisedMerchant: normaliseMerchant(tx.description),
+      date: tx.date,
+      amountCents: Math.round(tx.amount * 100),
+      amount: tx.amount,
+      originalRowJson: JSON.stringify(tx.raw),
+    }));
+    const withinFile = uniqueByKey(prepared, (tx) => tx.fingerprint);
+
+    const existingFingerprints = new Set<string>();
+    for (const fingerprintChunk of chunkForBoundParameters(
+      withinFile.values.map((tx) => tx.fingerprint),
+      1,
+      2,
+    )) {
+      const placeholders = fingerprintChunk.map(() => "?").join(",");
+      const existing = await db
+        .prepare(
+          `SELECT source_fingerprint FROM transactions WHERE firm_id=? AND client_id=? AND source_fingerprint IN (${placeholders})`,
+        )
+        .bind(session.firmId, clientId, ...fingerprintChunk)
+        .all<{ source_fingerprint: string }>();
+      for (const row of existing.results) existingFingerprints.add(row.source_fingerprint);
+    }
+
+    const freshTransactions = withinFile.values.filter(
+      (tx) => !existingFingerprints.has(tx.fingerprint),
+    );
+    const duplicates = withinFile.duplicates + existingFingerprints.size;
+    const importedInputs = freshTransactions.map((tx) => ({
+      id: tx.id,
+      date: tx.date,
+      description: tx.description,
+      amount: tx.amount,
+    }));
+    const candidates = detectRecurring(importedInputs);
+    const importId = crypto.randomUUID();
+    const objectKey = `imports/${session.firmId}/${clientId}/${importId}-${safeName(file.name)}`;
+
+    await files.put(objectKey, new TextEncoder().encode(csv), {
+      httpMetadata: { contentType: "text/csv" },
+      customMetadata: { clientId, importId },
+    });
+    storedObject = { files, key: objectKey };
+
+    const statements: D1PreparedStatement[] = [
+      db
+        .prepare(
+          "INSERT INTO import_batches(id,firm_id,client_id,filename,mapping_json,source,imported_rows,rejected_rows,errors_json) VALUES(?,?,?,?,?,'CSV',?,?,?)",
+        )
+        .bind(
+          importId,
+          session.firmId,
+          clientId,
+          file.name,
+          JSON.stringify(mapping),
+          parsed.transactions.length,
+          parsed.errors.length,
+          JSON.stringify([...parsed.errors, ...parsed.parseErrors.map((error) => error.message)]),
+        ),
+    ];
+
+    for (const transactionChunk of chunkForBoundParameters(freshTransactions, 12)) {
+      const values: unknown[] = [];
+      const placeholders = transactionChunk.map((tx) => {
+        values.push(
+          tx.id,
+          session.firmId,
+          clientId,
+          importId,
+          tx.providerId,
+          tx.accountName,
+          tx.description,
+          tx.normalisedMerchant,
+          tx.date,
+          tx.amountCents,
+          tx.fingerprint,
+          tx.originalRowJson,
+        );
+        return "(?,?,?,?,'CSV',?,?,?,?,?,?,?,?)";
+      });
+      statements.push(
+        db
+          .prepare(
+            `INSERT INTO transactions(id,firm_id,client_id,import_id,source,provider_id,account_name,description,normalised_merchant,transaction_date,amount_cents,source_fingerprint,original_row_json) VALUES ${placeholders.join(",")}`,
+          )
+          .bind(...values),
+      );
+    }
+
+    const preparedCandidates = candidates.map((candidate) => {
+      const amounts = candidate.transactions.map((tx) => Math.abs(tx.amount)).sort((a, b) => a - b);
+      const typical = amounts[Math.floor(amounts.length / 2)] ?? 0;
+      const cycle = (candidate.cycle === "IRREGULAR" ? "MONTHLY" : candidate.cycle) as BillingCycle;
+      return {
+        id: crypto.randomUUID(),
+        merchant: candidate.merchant,
+        cycle,
+        medianIntervalDays: candidate.medianIntervalDays,
+        amountVariation: candidate.amountVariation,
+        score: candidate.score,
+        annualCostCents: Math.round(annualise(typical, cycle) * 100),
+        transactionIdsJson: JSON.stringify(candidate.transactions.map((tx) => tx.id)),
+      };
+    });
+
+    for (const candidateChunk of chunkForBoundParameters(preparedCandidates, 10)) {
+      const values: unknown[] = [];
+      const placeholders = candidateChunk.map((candidate) => {
+        values.push(
+          candidate.id,
+          session.firmId,
+          clientId,
+          candidate.merchant,
+          candidate.cycle,
+          candidate.medianIntervalDays,
+          candidate.amountVariation,
+          candidate.score,
+          candidate.annualCostCents,
+          candidate.transactionIdsJson,
+        );
+        return "(?,?,?,?,?,?,?,?,?,?)";
+      });
+      statements.push(
+        db
+          .prepare(
+            "INSERT INTO detection_candidates(id,firm_id,client_id,merchant,billing_cycle,median_interval_days,amount_variation,confidence_score,annual_cost_cents,transaction_ids_json) VALUES " +
+              placeholders.join(","),
+          )
+          .bind(...values),
+      );
+    }
+
+    statements.push(
+      db
+        .prepare(
+          "INSERT INTO audit_events(id,firm_id,client_id,actor_id,action,entity_type,entity_id,summary_json) VALUES(?,?,?,?,?,?,?,?)",
+        )
+        .bind(
+          crypto.randomUUID(),
+          session.firmId,
+          clientId,
+          session.userId,
+          "import.completed",
+          "import",
+          importId,
+          JSON.stringify({
+            filename: file.name,
+            inserted: freshTransactions.length,
+            duplicates,
+            rejected: parsed.errors.length,
+            candidates: preparedCandidates.length,
+            objectKey,
+          }),
+        ),
+    );
+
+    await db.batch(statements);
+    storedObject = null;
+    completedClientId = clientId;
+  } catch (error) {
+    if (storedObject) {
+      try {
+        await storedObject.files.delete(storedObject.key);
+      } catch (cleanupError) {
+        console.error(
+          JSON.stringify({
+            message: "failed to remove CSV after import rollback",
+            error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+            objectKey: storedObject.key,
+          }),
+        );
+      }
+    }
+    const message = error instanceof Error ? error.message : "Unknown import error";
+    console.error(JSON.stringify({ message: "CSV import failed", error: message }));
+    return { error: `The import was not completed and no database changes were saved. ${message}` };
+  }
+
+  refresh();
+  redirect(`/imports?client=${completedClientId}`);
 }
 
 export async function confirmCandidate(form:FormData){const session=await requireAdvisor();const db=await getDb();const id=text(form,"candidateId");const candidate=await db.prepare("SELECT * FROM detection_candidates WHERE id=? AND firm_id=?").bind(id,session.firmId).first<Record<string,unknown>>();if(!candidate)throw new Error("Candidate not found");const subscriptionId=crypto.randomUUID();const cycle=String(candidate.billing_cycle) as BillingCycle;const annual=Number(candidate.annual_cost_cents);const multiplier={WEEKLY:52,MONTHLY:12,QUARTERLY:4,ANNUAL:1}[cycle];await db.batch([db.prepare(`INSERT INTO subscriptions(id,firm_id,client_id,provider,category,billing_cycle,amount_cents,annual_cost_cents,status) VALUES(?,?,?,?,?,?,?,?,'ACTIVE')`).bind(subscriptionId,session.firmId,candidate.client_id,text(form,"provider")||candidate.merchant,text(form,"category")||"Software",cycle,Math.round(annual/multiplier),annual),db.prepare("UPDATE detection_candidates SET status='CONFIRMED' WHERE id=?").bind(id)]);await audit(session,String(candidate.client_id),"candidate.confirmed","subscription",subscriptionId,{candidateId:id});refresh()}
