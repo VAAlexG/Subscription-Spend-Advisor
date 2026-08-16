@@ -60,7 +60,7 @@ pnpm wrangler d1 migrations apply subscription-spend-advisor-db --remote
 pnpm deploy
 ```
 
-Protect the production hostname with Cloudflare Access and allow only authorised Versatile Accounting staff. The first Access-authorised user bootstraps the firm-administrator membership; subsequent users must be added by an administrator in D1 until staff management UI is introduced.
+Protect the production hostname with Cloudflare Access and initially allow only `alexg@versatileaccounting.com.au`. That configured identity is the only account permitted to bootstrap the firm-administrator membership; subsequent users must be added by an administrator in D1 until staff management UI is introduced.
 
 ## GitHub deployment
 

@@ -14,12 +14,14 @@ export async function requireAdvisor(): Promise<AdvisorSession> {
   const db = await getDb();
   const firmId = env.FIRM_ID || "firm_va";
   const firmName = env.FIRM_NAME || "Versatile Accounting";
+  const initialAdminEmail = env.INITIAL_ADMIN_EMAIL?.toLowerCase();
   await db.prepare("INSERT OR IGNORE INTO firms (id, name) VALUES (?, ?)").bind(firmId, firmName).run();
   const userId = `user_${await sha256(email)}`;
   await db.prepare("INSERT OR IGNORE INTO users (id, email, name, external_subject) VALUES (?, ?, ?, ?)")
     .bind(userId, email, email.split("@")[0], email).run();
   const count = await db.prepare("SELECT COUNT(*) AS total FROM memberships WHERE firm_id = ?").bind(firmId).first<{ total: number }>();
   if (Number(count?.total ?? 0) === 0) {
+    if (!initialAdminEmail || email !== initialAdminEmail) throw new Error("This account is not authorised to initialise the firm workspace");
     await db.prepare("INSERT INTO memberships (id, firm_id, user_id, role) VALUES (?, ?, ?, 'FIRM_ADMIN')")
       .bind(crypto.randomUUID(), firmId, userId).run();
   }
